@@ -1,0 +1,10 @@
+Hello in multiple languages:
+English: Hello, World!
+Spanish: ¡Hola, Mundo!
+French: Bonjour le monde!
+Chinese: 你好，世界！
+Japanese: こんにちは世界
+Arabic: مرحبا بالعالم
+Russian: Привет, мир!
+Emoji: 🌍🚀💻🎉
+Mathematical: ∑∫∂∇ ≤ ≥ ≠ ∞

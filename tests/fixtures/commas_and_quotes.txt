@@ -1,0 +1,10 @@
+This line has a comma, right here.
+This line has "double quotes" in it.
+This line has 'single quotes' in it.
+This line has both, "commas and quotes", together.
+This line has a "quoted, comma inside" the quotes.
+This line ends with a comma,
+This line has an = sign which triggers CSV injection in some tools.
++also this one with plus.
+@and this one with at.
+Last line.
