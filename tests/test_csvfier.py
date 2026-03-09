@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -198,6 +199,21 @@ class TestRoundTrips:
         original = read_bytes(fixture("unicode.txt"))
         recovered = round_trip(fixture("unicode.txt"), tmp_path)
         assert recovered == original, "unicode.txt: byte-identical round-trip failed"
+
+    @require_module
+    def test_zip_file(self, tmp_path):
+        """Binary zip file — magic bytes, compressed data, and internal structure preserved."""
+        original = read_bytes(fixture("sample.zip"))
+        # Confirm fixture is a real zip (magic bytes PK\x03\x04)
+        assert original[:4] == b"PK\x03\x04", "Fixture sanity: sample.zip must start with PK magic bytes"
+        recovered = round_trip(fixture("sample.zip"), tmp_path)
+        assert recovered == original, "sample.zip: byte-identical round-trip failed"
+        # Confirm the recovered bytes are still a readable zip
+        with zipfile.ZipFile(tmp_path / "recovered_sample.zip") as zf:
+            names = zf.namelist()
+        assert "hello.txt" in names, "Recovered zip should contain hello.txt"
+        assert "subdir/code.py" in names, "Recovered zip should contain subdir/code.py"
+        assert "data.csv" in names, "Recovered zip should contain data.csv"
 
 
 # ---------------------------------------------------------------------------
@@ -482,3 +498,14 @@ class TestFixtureSanity:
         data = read_bytes(fixture("unicode.txt"))
         # UTF-8 multi-byte chars have bytes > 0x7F
         assert any(b > 0x7F for b in data), "unicode.txt should contain multi-byte UTF-8 chars"
+
+    def test_sample_zip_is_valid(self):
+        assert fixture("sample.zip").exists()
+        data = read_bytes(fixture("sample.zip"))
+        # ZIP magic bytes: PK\x03\x04
+        assert data[:4] == b"PK\x03\x04", "sample.zip must start with ZIP magic bytes"
+        with zipfile.ZipFile(fixture("sample.zip")) as zf:
+            names = zf.namelist()
+        assert "hello.txt" in names
+        assert "subdir/code.py" in names
+        assert "data.csv" in names
