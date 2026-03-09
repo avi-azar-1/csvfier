@@ -5,6 +5,7 @@ csvfier — Convert any file to valid CSV and back, losslessly.
 Usage:
     python csvfier.py encode <input-file> [-o output.csv]
     python csvfier.py decode <input.csv>  [-o output-file]
+    python csvfier.py decode <input.xlsx> [-o output-file]  # Excel produced by transfer medium
 
 The generated CSV has this schema (3 columns: type, key, value):
 
@@ -29,6 +30,46 @@ from pathlib import Path
 
 # How many characters per base64 chunk row (76 = MIME standard line length)
 CHUNK_SIZE = 76
+
+# Excel extensions handled transparently on decode
+_EXCEL_SUFFIXES = {".xlsx", ".xls"}
+
+
+# ---------------------------------------------------------------------------
+# Excel helper
+# ---------------------------------------------------------------------------
+
+
+def _read_excel_rows(path: Path) -> list[list[str]]:
+    """Read a csvfier-encoded Excel workbook and return rows as plain strings.
+
+    The workbook must have been produced by a transfer medium that saved a
+    csvfier CSV as an Excel file (.xlsx / .xls).  We read every non-empty
+    row of the first sheet and coerce all cell values to ``str`` so that the
+    rest of ``decode()`` sees exactly the same structure as ``csv.reader``
+    would produce from the original CSV.
+    """
+    try:
+        import openpyxl  # soft dependency — only needed for Excel input
+    except ImportError as exc:
+        raise ImportError(
+            "openpyxl is required to decode Excel files.  "
+            "Install it with: pip install openpyxl"
+        ) from exc
+
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = wb.active
+
+    rows: list[list[str]] = []
+    for row in ws.iter_rows(values_only=True):
+        # Skip completely empty rows that Excel sometimes adds
+        if all(cell is None for cell in row):
+            continue
+        # Coerce every cell to str; None cells (missing columns) become ""
+        rows.append(["" if cell is None else str(cell) for cell in row])
+
+    wb.close()
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -64,16 +105,22 @@ def encode(input_path: str, output_path: str) -> None:
 
 
 def decode(input_path: str, output_path: str | None) -> None:
-    """Read a csvfier CSV from *input_path*, reconstruct the original file.
+    """Read a csvfier CSV (or Excel) from *input_path*, reconstruct the original file.
+
+    If the input file has an ``.xlsx`` or ``.xls`` extension it is first
+    converted from Excel to rows using openpyxl, then decoded normally.
 
     If *output_path* is ``None``, the original filename from metadata is used
     and the file is written to the current working directory.
     """
     input_path = Path(input_path)
 
-    with open(input_path, newline="", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        rows = list(reader)
+    if input_path.suffix.lower() in _EXCEL_SUFFIXES:
+        rows = _read_excel_rows(input_path)
+    else:
+        with open(input_path, newline="", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
 
     if not rows:
         raise ValueError("CSV file is empty — not a valid csvfier file")

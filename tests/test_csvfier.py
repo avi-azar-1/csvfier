@@ -217,6 +217,144 @@ class TestRoundTrips:
 
 
 # ---------------------------------------------------------------------------
+# Excel decode tests  (simulates transfer medium that converts CSV -> xlsx)
+# ---------------------------------------------------------------------------
+
+
+def _csv_to_xlsx(csv_path: Path, xlsx_path: Path) -> None:
+    """Convert a csvfier CSV to an xlsx workbook, mimicking the transfer medium.
+
+    Each CSV row becomes a row in the first (and only) worksheet.  All cells
+    are written as plain strings so that openpyxl and Excel preserve them
+    exactly — no type inference.
+    """
+    import openpyxl
+    from openpyxl.styles import Alignment
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        for row in csv.reader(f):
+            ws.append(row)
+
+    # Force every cell to be stored as a string (quash numeric coercion)
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.data_type = "s"
+
+    wb.save(xlsx_path)
+
+
+class TestExcelDecode:
+    """Tests for the Excel (.xlsx) input path in decode()."""
+
+    @require_module
+    def test_xlsx_round_trip_simple(self, tmp_path):
+        """Encode simple.txt -> CSV -> xlsx (transfer medium) -> decode -> original."""
+        original = read_bytes(fixture("simple.txt"))
+
+        csv_path = tmp_path / "simple.csv"
+        xlsx_path = tmp_path / "simple.xlsx"
+        recovered_path = tmp_path / "recovered_simple.txt"
+
+        csvfier.encode(str(fixture("simple.txt")), str(csv_path))
+        _csv_to_xlsx(csv_path, xlsx_path)
+
+        # CSV file no longer needed — decode directly from xlsx
+        csvfier.decode(str(xlsx_path), str(recovered_path))
+
+        assert recovered_path.read_bytes() == original, (
+            "xlsx round-trip for simple.txt: byte-identical recovery failed"
+        )
+
+    @require_module
+    def test_xlsx_round_trip_code(self, tmp_path):
+        """Encode code.py -> CSV -> xlsx -> decode -> original (quotes, hashes, etc.)."""
+        original = read_bytes(fixture("code.py"))
+
+        csv_path = tmp_path / "code.csv"
+        xlsx_path = tmp_path / "code.xlsx"
+        recovered_path = tmp_path / "recovered_code.py"
+
+        csvfier.encode(str(fixture("code.py")), str(csv_path))
+        _csv_to_xlsx(csv_path, xlsx_path)
+        csvfier.decode(str(xlsx_path), str(recovered_path))
+
+        assert recovered_path.read_bytes() == original, (
+            "xlsx round-trip for code.py: byte-identical recovery failed"
+        )
+
+    @require_module
+    def test_xlsx_round_trip_zip(self, tmp_path):
+        """Encode sample.zip -> CSV -> xlsx -> decode -> byte-identical zip."""
+        original = read_bytes(fixture("sample.zip"))
+
+        csv_path = tmp_path / "sample.csv"
+        xlsx_path = tmp_path / "sample.xlsx"
+        recovered_path = tmp_path / "recovered_sample.zip"
+
+        csvfier.encode(str(fixture("sample.zip")), str(csv_path))
+        _csv_to_xlsx(csv_path, xlsx_path)
+        csvfier.decode(str(xlsx_path), str(recovered_path))
+
+        assert recovered_path.read_bytes() == original, (
+            "xlsx round-trip for sample.zip: byte-identical recovery failed"
+        )
+
+    @pytest.mark.skipif(not CSVFIER.exists(), reason="csvfier.py not yet implemented")
+    def test_cli_xlsx_round_trip(self, tmp_path):
+        """End-to-end CLI: encode -> xlsx (transfer) -> python csvfier.py decode .xlsx."""
+        input_file = fixture("code.py")
+        csv_path = tmp_path / "code.csv"
+        xlsx_path = tmp_path / "code.xlsx"
+        recovered = tmp_path / "code_recovered.py"
+
+        # Step 1: encode via CLI
+        result = subprocess.run(
+            [sys.executable, str(CSVFIER), "encode", str(input_file), "-o", str(csv_path)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"encode failed:\n{result.stderr}"
+
+        # Step 2: simulate transfer medium (CSV -> xlsx)
+        _csv_to_xlsx(csv_path, xlsx_path)
+
+        # Step 3: decode the xlsx via CLI
+        result = subprocess.run(
+            [sys.executable, str(CSVFIER), "decode", str(xlsx_path), "-o", str(recovered)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"decode failed:\n{result.stderr}"
+        assert recovered.read_bytes() == input_file.read_bytes(), (
+            "CLI xlsx round-trip not byte-identical"
+        )
+
+    @require_module
+    def test_xlsx_metadata_is_present(self, tmp_path):
+        """After encoding and converting to xlsx, the xlsx should contain the expected metadata."""
+        import openpyxl
+
+        csv_path = tmp_path / "simple.csv"
+        xlsx_path = tmp_path / "simple.xlsx"
+
+        csvfier.encode(str(fixture("simple.txt")), str(csv_path))
+        _csv_to_xlsx(csv_path, xlsx_path)
+
+        wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+        ws = wb.active
+        rows = [[str(c) if c is not None else "" for c in row] for row in ws.iter_rows(values_only=True)]
+        wb.close()
+
+        meta = {row[1]: row[2] for row in rows if row[0] == "meta"}
+        assert meta.get("filename") == "simple.txt"
+        assert meta.get("checksum", "").startswith("sha256:")
+        assert meta.get("size", "").isdigit()
+
+
+# ---------------------------------------------------------------------------
 # CSV structure tests
 # ---------------------------------------------------------------------------
 
