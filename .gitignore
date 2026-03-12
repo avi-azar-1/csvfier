@@ -1,0 +1,13 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyc
+
+# Pytest cache
+.pytest_cache/
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
