@@ -3,9 +3,15 @@
 csvfier — Convert any file to valid CSV and back, losslessly.
 
 Usage:
-    python csvfier.py encode <input-file> [-o output.csv]
+    python csvfier.py encode <input-file-or-folder> [-o output.csv]
     python csvfier.py decode <input.csv>  [-o output-file]
     python csvfier.py decode <input.xlsx> [-o output-file]  # Excel produced by transfer medium
+
+Folder support:
+    If <input> is a directory, it is automatically zipped in-memory before
+    encoding.  No intermediate .zip file is written to disk.
+    On decode, if the recovered file is a .zip archive it is automatically
+    extracted to the same directory, and the .zip file is then deleted.
 
 The generated CSV has this schema (3 columns: type, key, value):
 
@@ -24,8 +30,10 @@ import argparse
 import base64
 import csv
 import hashlib
+import io
 import os
 import sys
+import zipfile
 from pathlib import Path
 
 # How many characters per base64 chunk row (76 = MIME standard line length)
@@ -77,14 +85,43 @@ def _read_excel_rows(path: Path) -> list[list[str]]:
 # ---------------------------------------------------------------------------
 
 
+def _zip_folder_to_bytes(folder: Path) -> tuple[bytes, str]:
+    """Zip *folder* entirely into an in-memory buffer.
+
+    Returns ``(zip_bytes, zip_filename)`` where *zip_filename* is
+    ``<folder_name>.zip``.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for item in sorted(folder.rglob("*")):
+            arcname = item.relative_to(folder.parent)
+            if item.is_dir():
+                # Write an explicit directory entry (trailing slash convention).
+                # This preserves empty folders, matching standard Windows zip behaviour.
+                dir_info = zipfile.ZipInfo(arcname.as_posix() + "/")
+                zf.writestr(dir_info, b"")
+            else:
+                zf.write(item, arcname)
+    buf.seek(0)
+    return buf.read(), folder.name + ".zip"
+
+
 def encode(input_path: str, output_path: str) -> None:
-    """Read *input_path* as raw bytes, write a csvfier CSV to *output_path*."""
+    """Read *input_path* as raw bytes, write a csvfier CSV to *output_path*.
+
+    If *input_path* is a directory it is first zipped entirely in memory;
+    no intermediate .zip file is written to disk.
+    """
     input_path = Path(input_path)
     output_path = Path(output_path)
 
-    raw = input_path.read_bytes()
+    if input_path.is_dir():
+        print(f"Input is a directory — zipping '{input_path.name}' in memory …")
+        raw, filename = _zip_folder_to_bytes(input_path)
+    else:
+        raw = input_path.read_bytes()
+        filename = input_path.name
 
-    filename = input_path.name
     checksum = "sha256:" + hashlib.sha256(raw).hexdigest()
     size = str(len(raw))
 
@@ -177,6 +214,15 @@ def decode(input_path: str, output_path: str | None) -> None:
 
     output_path.write_bytes(raw)
 
+    # Auto-extract if the recovered file is a zip archive
+    if zipfile.is_zipfile(output_path):
+        extract_dir = output_path.parent
+        print(f"Recovered file is a ZIP archive — extracting to '{extract_dir}' …")
+        with zipfile.ZipFile(output_path, "r") as zf:
+            zf.extractall(extract_dir)
+        output_path.unlink()
+        print(f"ZIP removed after extraction.")
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -214,7 +260,13 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "encode":
-            output = args.output or (args.input + ".csv")
+            # Default output name: <dirname>.zip.csv for folders, <file>.csv for files
+            if os.path.isdir(args.input):
+                folder_name = Path(args.input).name
+                default_output = str(Path(args.input).parent / (folder_name + ".zip.csv"))
+            else:
+                default_output = args.input + ".csv"
+            output = args.output or default_output
             encode(args.input, output)
             print(f"Encoded -> {output}")
 
